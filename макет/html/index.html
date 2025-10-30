@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🎳 Bowling Arena Deluxe</title>
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    background: radial-gradient(circle at center, #050505 0%, #000 100%);
+    font-family: 'Segoe UI', sans-serif;
+  }
+
+  .arena {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    gap: 2vw;
+    background: radial-gradient(ellipse at center, #000 20%, #111 100%);
+  }
+
+  .side {
+    flex: 1;
+    background: linear-gradient(180deg, #ff0080, #00ffff);
+    opacity: 0.15;
+    filter: blur(70px);
+    border-radius: 50%;
+    height: 65%;
+    max-width: 120px;
+  }
+
+  canvas {
+    display: block;
+    background: radial-gradient(ellipse at top, #444 0%, #111 100%);
+    border-radius: 15px;
+    box-shadow: 0 0 50px rgba(255, 200, 0, 0.2);
+    max-width: 95vw;
+    max-height: 80vh;
+  }
+
+  #ui {
+    position: absolute;
+    top: 10px;
+    width: 100%;
+    text-align: center;
+    color: #fff;
+    text-shadow: 0 0 10px #000;
+  }
+
+  button {
+    background: #ff3d00;
+    color: white;
+    border: none;
+    padding: 10px 25px;
+    font-size: 16px;
+    border-radius: 8px;
+    cursor: pointer;
+    margin: 5px;
+    transition: 0.2s;
+  }
+
+  button:hover {
+    background: #ff6a00;
+  }
+
+  #score {
+    font-size: 20px;
+    margin-top: 10px;
+  }
+
+  @media (max-width: 700px) {
+    #ui button {
+      font-size: 14px;
+      padding: 8px 16px;
+    }
+    #score {
+      font-size: 16px;
+    }
+  }
+</style>
+</head>
+<body>
+
+<div id="ui">
+  <button id="restartBtn">🔄 Новая игра</button>
+  <h2 id="score">Очки: 0</h2>
+  <p>⬅ Влево | ➡ Вправо | 🖱 Клик / тап — бросок</p>
+</div>
+
+<div class="arena">
+  <div class="side"></div>
+  <canvas id="game" width="900" height="500"></canvas>
+  <div class="side"></div>
+</div>
+
+<script>
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+const restartBtn = document.getElementById("restartBtn");
+const scoreDisplay = document.getElementById("score");
+
+let pins = [];
+let ball;
+let score = 0;
+let isRolling = false;
+let laneX, laneWidth;
+
+// --- Адаптивность ---
+function resizeCanvas() {
+  const ratio = 900 / 500;
+  let width = window.innerWidth * 0.9;
+  let height = width / ratio;
+  if (height > window.innerHeight * 0.8) {
+    height = window.innerHeight * 0.8;
+    width = height * ratio;
+  }
+  canvas.width = width;
+  canvas.height = height;
+  laneX = canvas.width * 0.3;
+  laneWidth = canvas.width * 0.4;
+  if (ball && !isRolling) ball.reset();
+  if (pins.length === 0) setupPins();
+}
+window.addEventListener("resize", resizeCanvas);
+
+const friction = 0.985;
+const gravity = 0.12;
+
+// --- Класс шара ---
+class Ball {
+  constructor() { this.reset(); }
+  reset() {
+    this.x = canvas.width / 2;
+    this.y = canvas.height - 80;
+    this.radius = canvas.width / 45;
+    this.color = "#00aaff";
+    this.velX = 0;
+    this.velY = 0;
+    this.spin = 0;
+  }
+  draw() {
+    // шар с бликами
+    const g = ctx.createRadialGradient(this.x - 10, this.y - 10, 5, this.x, this.y, this.radius);
+    g.addColorStop(0, "#fff");
+    g.addColorStop(0.2, this.color);
+    g.addColorStop(1, "#004466");
+    ctx.beginPath();
+    ctx.fillStyle = g;
+    ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+    ctx.fill();
+
+    // лёгкая тень под шаром
+    ctx.beginPath();
+    ctx.ellipse(this.x, this.y + this.radius, this.radius * 1.1, this.radius * 0.3, 0, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(0,0,0,0.4)";
+    ctx.fill();
+  }
+  update() {
+    if (isRolling) {
+      this.x += this.velX;
+      this.y += this.velY;
+      this.velY *= friction;
+      this.velX *= friction;
+      this.spin += 0.1;
+    }
+    // ограничение движения по дорожке
+    if (this.x < laneX + this.radius) this.x = laneX + this.radius;
+    if (this.x > laneX + laneWidth - this.radius) this.x = laneX + laneWidth - this.radius;
+  }
+}
+
+// --- Класс кегли ---
+class Pin {
+  constructor(x, y) {
+    this.x = x;
+    this.y = y;
+    this.radius = canvas.width / 75;
+    this.hit = false;
+    this.velX = 0;
+    this.velY = 0;
+    this.rotation = 0;
+  }
+  draw() {
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    ctx.rotate(this.rotation);
+    ctx.fillStyle = "#fff";
+    ctx.beginPath();
+    ctx.ellipse(0, 0, this.radius * 0.7, this.radius * 1.6, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // красная полоска
+    ctx.strokeStyle = "red";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.ellipse(0, -this.radius * 0.6, this.radius * 0.7, this.radius * 0.2, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+  update() {
+    if (this.hit) {
+      this.x += this.velX;
+      this.y += this.velY;
+      this.velY += gravity * 0.4;
+      this.velX *= 0.98;
+      this.velY *= 0.98;
+      this.rotation += this.velX * 0.05;
+    }
+  }
+}
+
+// --- Отрисовка дорожки ---
+function drawLane() {
+  const grad = ctx.createLinearGradient(laneX, 0, laneX + laneWidth, 0);
+  grad.addColorStop(0, "#704214");
+  grad.addColorStop(1, "#9b6c2a");
+  ctx.fillStyle = grad;
+  ctx.fillRect(laneX, 0, laneWidth, canvas.height);
+
+  // текстура досок
+  ctx.fillStyle = "rgba(255,255,255,0.08)";
+  for (let i = 0; i < 10; i++) {
+    ctx.fillRect(laneX + (laneWidth / 10) * i, 0, 2, canvas.height);
+  }
+
+  // отражение света
+  const gloss = ctx.createLinearGradient(0, 0, 0, canvas.height);
+  gloss.addColorStop(0, "rgba(255,255,255,0.25)");
+  gloss.addColorStop(0.2, "rgba(255,255,255,0.05)");
+  gloss.addColorStop(1, "rgba(255,255,255,0)");
+  ctx.fillStyle = gloss;
+  ctx.fillRect(laneX, 0, laneWidth, canvas.height);
+}
+
+// --- Кегли ---
+function setupPins() {
+  pins = [];
+  const startX = canvas.width / 2;
+  const startY = canvas.height * 0.18;
+  const offset = canvas.width * 0.045;
+  const rows = 4;
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c <= r; c++) {
+      const x = startX - (r * offset) / 2 + c * offset;
+      const y = startY + r * offset * 1.2;
+      pins.push(new Pin(x, y));
+    }
+  }
+}
+
+// --- Столкновения ---
+function detectCollisions() {
+  for (let pin of pins) {
+    if (!pin.hit) {
+      const dx = pin.x - ball.x;
+      const dy = pin.y - ball.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < pin.radius + ball.radius) {
+        pin.hit = true;
+        score++;
+        scoreDisplay.textContent = `Очки: ${score}`;
+        const angle = Math.atan2(dy, dx);
+        const force = 6;
+        pin.velX = Math.cos(angle) * force;
+        pin.velY = Math.sin(angle) * force;
+      }
+    }
+  }
+}
+
+// --- Главный цикл ---
+function animate() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  drawLane();
+  for (let pin of pins) {
+    pin.update();
+    pin.draw();
+  }
+  ball.update();
+  ball.draw();
+  detectCollisions();
+  requestAnimationFrame(animate);
+}
+
+// --- Управление ---
+window.addEventListener("keydown", (e) => {
+  if (isRolling) return;
+  if (e.key === "ArrowLeft") ball.x -= canvas.width * 0.02;
+  if (e.key === "ArrowRight") ball.x += canvas.width * 0.02;
+});
+
+canvas.addEventListener("mousedown", throwBall);
+canvas.addEventListener("touchstart", throwBall);
+function throwBall() {
+  if (isRolling) return;
+  ball.velY = -canvas.height * 0.035;
+  isRolling = true;
+}
+
+restartBtn.addEventListener("click", () => {
+  score = 0;
+  scoreDisplay.textContent = "Очки: 0";
+  ball.reset();
+  setupPins();
+  isRolling = false;
+});
+
+// --- Старт ---
+function startGame() {
+  ball = new Ball();
+  setupPins();
+  resizeCanvas();
+  animate();
+}
+startGame();
+</script>
+</body>
+</html>
